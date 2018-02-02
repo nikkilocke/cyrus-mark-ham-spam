@@ -31,7 +31,7 @@ Each user must create a Cyrus Sieve script that looks like this:
 
 Note: The above assumes you have `unixhierarchysep: yes` in your `/etc/imapd.comf`. If you do not, the `INBOX/SPAM` should be `INBOX.SPAM`.
 
-They must then load it into Cyrus using the `sieveshell` command, like as follows (the `>` is the sieveshell prompt):
+They must then load it into Cyrus using the `sieveshell` command, like as follows (the `>` is the sieveshell prompt, and the file above is called `spamrule`):
 
 	sieveshell -u (your user name) localhost:2000
 	Please enter your password:
