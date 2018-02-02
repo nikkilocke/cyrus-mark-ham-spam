@@ -1,0 +1,185 @@
+#! /bin/bash
+SPAMFOLDER=SPAM
+REMOVECMD='/usr/bin/spamassassin -d'
+LEARNCMD='/usr/bin/sa-learn --single'
+VERBOSE=0
+TEST=
+
+function usage() {
+	echo "Learn misfiled spam And ham in a Cyrus IMAP mail folder
+Usage:-
+
+$0 [options] [user [user ...]]
+
+Options are:
+-s, --spamfolder
+	The folder to which the user moves spam found in their inbox (SPAM)
+-r, --removecmd
+	The command to remove all spamassassin spam headers from an email (/usr/bin/spamassassin -d)
+-l, --learncmd
+	The command to learn spam (/usr/bin/sa-learn --single)
+-v, --verbose
+	Report every message processed
+-t, --test
+	Test run - echo commands, but do not actually run them
+
+If no specific users are supplied, all users are processed.
+
+Notes:
+
+This command MUST be run as the cyrus user (usually cyrus).
+"
+}
+
+#
+# Exit with an error message
+#
+function exiterr() {
+	echo "Error: $@"
+	exit 4
+}
+
+# Test for enhanced getopt
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    exiterr "I’m sorry, `getopt --test` failed in this environment."
+fi
+
+OPTIONS=s:r:l:vth
+LONGOPTIONS=spamfolder:,removecmd:,learncmd:,verbose,test,help
+
+# -temporarily store output to be able to check for errors
+# -e.g. use "--options" parameter by name to activate quoting/enhanced mode
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# read getopt’s output this way to handle the quoting right:
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -s|--spamfolder)
+            SPAMFOLDER=$2
+            shift 2
+            ;;
+        -r|--removecmd)
+            REMOVECMD=$2
+            shift 2
+            ;;
+        -l|--learncmd)
+            LEARNCMD=$2
+            shift 2
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -t|--test)
+            TEST=echo
+            shift
+            ;;
+        -h|--help)
+        	usage
+        	exit 0
+        	;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            exiterr "Programming error"
+            ;;
+    esac
+done
+
+USERS="$@"
+
+#
+# echo command if verbose is on
+#
+function verbose() {
+	[ $VERBOSE -eq 1 ] && echo "$@"
+}
+
+#
+# Check newly created file has same owner and group as original
+# If it has, chmod -rw------- (600)
+# Argument 1 is original file
+# Argument 2 is new file
+#
+function checkownership() {
+	if [ ! -s $2 ]
+	then
+		exiterr "'"$REMOVECMD"'" output not found
+	fi
+	OWNER=`stat -c '%U:%G' $1`
+	if [ "$OWNER" != "`stat -c '%U:%G' $2`" ]
+	then
+		rm -f $2
+		exiterr Program must be run as $OWNER
+	fi
+	chmod 600 $2
+}
+
+#
+# Mark file as spam or ham
+# Argument 1 is "spam" or "ham"
+# Argument 2 is file to mark
+#
+function markas() {
+	verbose "Marking $2 as $1"
+	TEMP=$2tmp
+	# Remove spam headers, output to temp file
+	$TEST $REMOVECMD <$2 >$TEMP || exiterr "$REMOVECMD <$2 >$TEMP failed"
+	# Check ownership is correct, exit if not
+	$TEST checkownership $2 $TEMP
+	# Learn as spam or ham
+	$TEST $LEARNCMD --$1 <$TEMP >/dev/null 2>&1 || exiterr "$LEARNCMD --$1 <$TEMP >/dev/null 2>&1 failed"
+	# Replace original file with stripped one
+	$TEST mv -f $TEMP $2 || exiterr "mv -f $TEMP $2 command failed"
+}
+
+#
+# Process a whole mailbox
+# Argument 1 is inbox folder
+# Learn all the files in inbox which have X-Spam-Flag: YES as ham
+# Learn all the files in spam folder which have X-Spam-Flag: NO as spam
+#
+function processmailbox() {
+	verbose "Processing mailbox `basename $1`" 
+	for i in $1/*.
+	do
+		grep -isq '^x-spam-flag: *yes' $i && markas ham $i
+	done
+	[ -d "$1/$SPAMFOLDER" ] || return 0
+	for i in $1/$SPAMFOLDER/*.
+	do
+		grep -isq '^x-spam-flag: *no' $i && markas spam $i
+	done
+}
+
+#
+# See if supplied mailbox folder corresponds to a command-line user
+#
+function wanted() {
+	[ -z "$USERS" ] && return 0
+	USER=`basename $1`
+	for i in $USERS
+	do
+		[ "$USER" = "$i" ] && return 0
+	done
+	return 1
+}
+
+#
+#
+#
+for u in /var/spool/imap/*/user/*
+do
+	wanted $u && processmailbox $u
+done
