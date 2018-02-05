@@ -1,4 +1,5 @@
 #! /bin/bash
+CYRUSROOT=/var/spool/imap
 SPAMFOLDER=SPAM
 REMOVECMD='/usr/bin/spamassassin -d'
 LEARNCMD='/usr/bin/sa-learn --single'
@@ -12,6 +13,8 @@ Usage:-
 $0 [options] [user [user ...]]
 
 Options are:
+-c, --cyrusroot
+	The folder where Cyrus stores mail (/var/spool/imap)
 -s, --spamfolder
 	The folder to which the user moves spam found in their inbox (SPAM)
 -r, --removecmd
@@ -63,6 +66,10 @@ eval set -- "$PARSED"
 # now enjoy the options in order and nicely split until we see --
 while true; do
     case "$1" in
+        -c|--cyrusroot)
+            CYRUSROOT=$2
+            shift 2
+            ;;
         -s|--spamfolder)
             SPAMFOLDER=$2
             shift 2
@@ -134,14 +141,24 @@ function checkownership() {
 function markas() {
 	verbose "Marking $2 as $1"
 	TEMP=$2tmp
-	# Remove spam headers, output to temp file
-	$TEST $REMOVECMD <$2 >$TEMP || exiterr "$REMOVECMD <$2 >$TEMP failed"
-	# Check ownership is correct, exit if not
-	$TEST checkownership $2 $TEMP
-	# Learn as spam or ham
-	$TEST $LEARNCMD --$1 <$TEMP >/dev/null 2>&1 || exiterr "$LEARNCMD --$1 <$TEMP >/dev/null 2>&1 failed"
-	# Replace original file with stripped one
-	$TEST mv -f $TEMP $2 || exiterr "mv -f $TEMP $2 command failed"
+	if [ -z "$TEST" ]
+	then
+		# Remove spam headers, output to temp file
+		$REMOVECMD <$2 >$TEMP || exiterr "$REMOVECMD <$2 >$TEMP failed"
+		# Check ownership is correct, exit if not
+		checkownership $2 $TEMP
+		# Learn as spam or ham
+		$LEARNCMD --$1 <$TEMP >/dev/null 2>&1 || exiterr "$LEARNCMD --$1 <$TEMP >/dev/null 2>&1 failed"
+		# Replace original file with stripped one
+		mv -f $TEMP $2 || exiterr "mv -f $TEMP $2 command failed"
+	else
+		# Remove spam headers, output to temp file
+		echo "$REMOVECMD <$2 >$TEMP"
+		# Learn as spam or ham
+		echo "$LEARNCMD --$1 <$TEMP >/dev/null 2>&1"
+		# Replace original file with stripped one
+		echo "mv -f $TEMP $2"
+	fi
 }
 
 #
@@ -179,7 +196,7 @@ function wanted() {
 #
 #
 #
-for u in /var/spool/imap/*/user/*
+for u in $CYRUSROOT/*/user/*
 do
 	wanted $u && processmailbox $u
 done
